@@ -1,0 +1,58 @@
+name: Intel x86_64 build
+
+on:
+  push:
+    branches: [intel-x86_64]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Intel (x86_64) DMG
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Report toolchain
+        run: |
+          uname -m
+          sw_vers
+          swift --version
+          xcodebuild -version || true
+
+      - name: Retarget build to Intel
+        run: |
+          set -euo pipefail
+          sed -i '' 's|^TARGET="arm64-apple-macosx14.0"|TARGET="x86_64-apple-macosx14.0"|' build.sh
+          grep -n '^TARGET=' build.sh
+
+      - name: Build
+        run: ./build.sh
+
+      - name: Verify architecture
+        run: |
+          set -euo pipefail
+          APP="build/stage/Vorssaint.app"
+          lipo -archs "$APP/Contents/MacOS/Vorssaint"
+          file "$APP/Contents/MacOS/Vorssaint"
+          if lipo -archs "$APP/Contents/MacOS/Vorssaint" | tr ' ' '\n' | grep -qx arm64; then
+            echo "binary still contains arm64 slice" >&2
+            exit 1
+          fi
+          "$APP/Contents/MacOS/Vorssaint" --selftest || echo "selftest returned non-zero (non-fatal)"
+
+      - name: Package DMG
+        run: ./Tools/make-dmg.sh
+
+      - name: Upload DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vorssaint-intel-x86_64
+          path: dist/*.dmg
+          if-no-files-found: error
