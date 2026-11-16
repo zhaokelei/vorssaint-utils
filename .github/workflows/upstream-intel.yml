@@ -46,7 +46,11 @@ jobs:
             TAG="$(gh release view --repo "${UPSTREAM}" --json tagName -q .tagName)"
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          STATE="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" --jq .draft 2>/dev/null || echo missing)"
+          STATE="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" --jq '.draft' 2>/dev/null || true)"
+          case "${STATE}" in
+            true|false) ;;
+            *) STATE="missing" ;;
+          esac
           if [ "${STATE}" = "false" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "${TAG} is already published here, nothing to do."
@@ -137,7 +141,11 @@ jobs:
           TAG='${{ steps.version.outputs.tag }}'
           REPO="${GITHUB_REPOSITORY}"
 
-          OLD="$(gh api "repos/${REPO}/releases/tags/${TAG}" --jq .id 2>/dev/null || true)"
+          OLD="$(gh api "repos/${REPO}/releases/tags/${TAG}" --jq '.id' 2>/dev/null || true)"
+          # A 404 still prints its error body, so only a plain number is a real id.
+          if ! printf '%s' "${OLD}" | grep -qxE '[0-9]+'; then
+            OLD=""
+          fi
           if [ -n "${OLD}" ]; then
             echo "replacing the earlier release ${OLD}"
             gh api -X DELETE "repos/${REPO}/releases/${OLD}"
