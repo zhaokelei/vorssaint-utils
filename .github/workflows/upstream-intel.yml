@@ -46,12 +46,13 @@ jobs:
             TAG="$(gh release view --repo "${UPSTREAM}" --json tagName -q .tagName)"
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+          STATE="$(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft -q .isDraft 2>/dev/null || echo missing)"
+          if [ "${STATE}" = "false" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "${TAG} is already published here, nothing to do."
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
-            echo "${TAG} is not published here yet."
+            echo "${TAG} is not published here yet (state: ${STATE})."
           fi
 
       - name: Take the upstream sources
@@ -79,7 +80,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add build.sh
-          git commit -m "build: target ${VORSSAINT_TARGET} for the Intel release of ${TAG}"
+          if git diff --cached --quiet; then
+            echo "build.sh already targets x86_64, reusing the existing commit"
+          else
+            git commit -m "build: target ${VORSSAINT_TARGET} for the Intel release of ${TAG}"
+          fi
           git tag -f "${TAG}"
           git push origin "HEAD:refs/heads/intel/${TAG}"
           git push -f origin "refs/tags/${TAG}"
@@ -113,6 +118,10 @@ jobs:
         run: |
           set -euo pipefail
           TAG='${{ steps.version.outputs.tag }}'
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "removing the leftover draft for ${TAG}"
+            gh release delete "${TAG}" --repo "${GITHUB_REPOSITORY}" --yes
+          fi
           DMG="$(ls dist/*.dmg | head -1)"
           NAME="$(basename "${DMG}" .dmg)"
           ASSET="${NAME}-intel-x86_64.dmg"
