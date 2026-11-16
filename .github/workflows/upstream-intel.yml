@@ -46,7 +46,7 @@ jobs:
             TAG="$(gh release view --repo "${UPSTREAM}" --json tagName -q .tagName)"
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          STATE="$(gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft -q .isDraft 2>/dev/null || echo missing)"
+          STATE="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" --jq .draft 2>/dev/null || echo missing)"
           if [ "${STATE}" = "false" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "${TAG} is already published here, nothing to do."
@@ -118,10 +118,14 @@ jobs:
         run: |
           set -euo pipefail
           TAG='${{ steps.version.outputs.tag }}'
-          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            echo "removing the leftover draft for ${TAG}"
-            gh release delete "${TAG}" --repo "${GITHUB_REPOSITORY}" --yes
+          REPO="${GITHUB_REPOSITORY}"
+
+          OLD="$(gh api "repos/${REPO}/releases/tags/${TAG}" --jq .id 2>/dev/null || true)"
+          if [ -n "${OLD}" ]; then
+            echo "replacing the earlier release ${OLD}"
+            gh api -X DELETE "repos/${REPO}/releases/${OLD}"
           fi
+
           DMG="$(ls dist/*.dmg | head -1)"
           NAME="$(basename "${DMG}" .dmg)"
           ASSET="${NAME}-intel-x86_64.dmg"
@@ -138,7 +142,22 @@ jobs:
             echo
             echo "Unofficial community build, not supported by the upstream maintainer. Official releases: https://github.com/${UPSTREAM}/releases"
           } > release-notes.md
-          gh release create "${TAG}" "${ASSET}" \
-            --title "${NAME} - Intel (x86_64) unofficial build" \
-            --notes-file release-notes.md
+
+          # Create it as a draft, attach the DMG, then publish, so a failed upload
+          # never leaves a public release without a file.
+          jq -n --arg tag "${TAG}" \
+                --arg name "${NAME} - Intel (x86_64) unofficial build" \
+                --arg body "$(cat release-notes.md)" \
+                '{tag_name: $tag, name: $name, body: $body, draft: true, prerelease: false}' > payload.json
+          ID="$(gh api -X POST "repos/${REPO}/releases" --input payload.json --jq .id)"
+          echo "draft release ${ID}"
+
+          curl -fsS -X POST \
+            -H "Authorization: token ${GH_TOKEN}" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary @"${ASSET}" \
+            "https://uploads.github.com/repos/${REPO}/releases/${ID}/assets?name=${ASSET}" > /dev/null
+
+          gh api -X PATCH "repos/${REPO}/releases/${ID}" -F draft=false > /dev/null
           echo "published ${TAG} with ${ASSET}"
+
