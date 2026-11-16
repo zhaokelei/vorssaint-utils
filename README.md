@@ -1,3 +1,37 @@
+> ## Fork notice: Intel (x86_64) builds only
+>
+> Upstream project: **https://github.com/vorssaint/vorssaint-utils**
+> Official releases, Apple Silicon and signed: https://github.com/vorssaint/vorssaint-utils/releases
+>
+> This repository exists for one purpose: to make Vorssaint work on Intel Macs. Upstream `build.sh`
+> hardcodes `TARGET="arm64-apple-macosx14.0"`, so the official DMG will not launch on an x86_64 Mac.
+> A workflow here changes that single target line, builds on an Intel runner and publishes the DMG
+> as a release. No application code is touched.
+>
+> Everything published here is unofficial and unsigned, and comes with no support from the
+> upstream maintainer. If you are on Apple Silicon, use the official build.
+>
+> 本仓库只是为编译 macOS Intel 版本而存在。上游项目地址：
+> **https://github.com/vorssaint/vorssaint-utils** ，官方版本（Apple Silicon、已签名）请到上游 Releases 下载。
+> 这里的每个构建都是非官方、未签名版本，上游作者不提供支持。
+
+### How an Intel build gets published
+
+1. A scheduled workflow checks the upstream repository once a day for the newest stable release tag.
+2. If this repository has no release for that version yet, it fetches the tag, switches the build
+   target to `x86_64-apple-macosx14.0`, builds on a `macos-15-intel` runner and checks the result
+   with `lipo`.
+3. The one-line change is committed to a branch `intel/<tag>`, that commit gets the same tag as
+   upstream, and the DMG is published there.
+
+The version numbers here always match upstream, so `v3.4.4` in this repository is upstream 3.4.4
+built for x86_64. You can also run the workflow by hand from the Actions tab and pass any tag.
+
+Scheduled runs are disabled by default on a fork. Open the **Actions** tab once and enable
+**Intel build from upstream** if you want new versions to arrive on their own.
+
+---
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/logo-dark.svg">

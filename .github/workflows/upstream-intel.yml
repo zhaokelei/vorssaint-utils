@@ -1,0 +1,135 @@
+name: Intel build from upstream
+
+on:
+  schedule:
+    # Once a day, after the maintainer usually publishes.
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Upstream tag to build, for example v3.4.5. Leave empty for the latest stable release."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: intel-release
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: vorssaint/vorssaint-utils
+  VORSSAINT_TARGET: "x86_64-apple-macosx14.0"
+
+jobs:
+  build:
+    name: Build and publish the Intel DMG
+    runs-on: macos-15-intel
+    timeout-minutes: 90
+    steps:
+      - name: Check out this repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Work out which upstream version to build
+        id: version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WANTED: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "${WANTED}" ]; then
+            TAG="${WANTED}"
+          else
+            TAG="$(gh release view --repo "${UPSTREAM}" --json tagName -q .tagName)"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          if gh release view "${TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "${TAG} is already published here, nothing to do."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "${TAG} is not published here yet."
+          fi
+
+      - name: Take the upstream sources
+        if: steps.version.outputs.skip == 'false'
+        run: |
+          set -euo pipefail
+          TAG='${{ steps.version.outputs.tag }}'
+          git remote add upstream "https://github.com/${UPSTREAM}.git"
+          git fetch --no-tags upstream "+refs/tags/${TAG}:refs/tags/${TAG}"
+          git checkout -B "intel/${TAG}" "refs/tags/${TAG}"
+          echo "building from $(git rev-parse --short HEAD)"
+
+      - name: Point the build at x86_64
+        if: steps.version.outputs.skip == 'false'
+        run: |
+          set -euo pipefail
+          TAG='${{ steps.version.outputs.tag }}'
+          sed -i '' "s|^TARGET=\"arm64-apple-macosx14.0\"|TARGET=\"${VORSSAINT_TARGET}\"|" build.sh
+          if ! grep -qx "TARGET=\"${VORSSAINT_TARGET}\"" build.sh; then
+            echo "::error::build.sh no longer has the arm64 TARGET line this workflow expects"
+            grep -n 'TARGET' build.sh || true
+            exit 1
+          fi
+          grep -n '^TARGET=' build.sh
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add build.sh
+          git commit -m "build: target ${VORSSAINT_TARGET} for the Intel release of ${TAG}"
+          git tag -f "${TAG}"
+          git push origin "HEAD:refs/heads/intel/${TAG}"
+          git push -f origin "refs/tags/${TAG}"
+
+      - name: Build
+        if: steps.version.outputs.skip == 'false'
+        run: ./build.sh
+
+      - name: Check the binary is Intel only
+        if: steps.version.outputs.skip == 'false'
+        run: |
+          set -euo pipefail
+          BIN="build/stage/Vorssaint.app/Contents/MacOS/Vorssaint"
+          ARCHS="$(lipo -archs "${BIN}")"
+          echo "archs: ${ARCHS}"
+          file "${BIN}"
+          if echo "${ARCHS}" | tr ' ' '\n' | grep -qx arm64; then
+            echo "::error::the binary still contains an arm64 slice"
+            exit 1
+          fi
+          echo "${ARCHS}" | tr ' ' '\n' | grep -qx x86_64
+
+      - name: Package the DMG
+        if: steps.version.outputs.skip == 'false'
+        run: ./Tools/make-dmg.sh
+
+      - name: Publish the release
+        if: steps.version.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG='${{ steps.version.outputs.tag }}'
+          DMG="$(ls dist/*.dmg | head -1)"
+          NAME="$(basename "${DMG}" .dmg)"
+          ASSET="${NAME}-intel-x86_64.dmg"
+          cp "${DMG}" "${ASSET}"
+          SHA="$(shasum -a 256 "${ASSET}" | awk '{print $1}')"
+          {
+            echo "Intel (x86_64) build of ${TAG}, compiled from the upstream tag."
+            echo
+            echo "- Source: upstream ${TAG}. No application code changed, the only difference is TARGET in build.sh, set to ${VORSSAINT_TARGET}."
+            echo "- Built on a GitHub Intel runner (macos-15-intel) and checked with lipo -archs, which reports x86_64 only."
+            echo "- Unsigned and not notarized. First launch: right-click the app, choose Open, then Open again."
+            echo
+            echo "sha256: ${SHA}"
+            echo
+            echo "Unofficial community build, not supported by the upstream maintainer. Official releases: https://github.com/${UPSTREAM}/releases"
+          } > release-notes.md
+          gh release create "${TAG}" "${ASSET}" \
+            --title "${NAME} - Intel (x86_64) unofficial build" \
+            --notes-file release-notes.md
+          echo "published ${TAG} with ${ASSET}"
