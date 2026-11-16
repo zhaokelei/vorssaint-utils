@@ -109,7 +109,24 @@ jobs:
 
       - name: Package the DMG
         if: steps.version.outputs.skip == 'false'
-        run: ./Tools/make-dmg.sh
+        run: |
+          set -uo pipefail
+          for attempt in 1 2 3; do
+            echo "package attempt ${attempt}"
+            if ./Tools/make-dmg.sh; then
+              echo "packaged on attempt ${attempt}"
+              exit 0
+            fi
+            echo "attempt ${attempt} failed, unmounting what it left behind"
+            for vol in /Volumes/Vorssaint*; do
+              if [ -e "${vol}" ]; then
+                hdiutil detach "${vol}" -force -quiet || true
+              fi
+            done
+            sleep 5
+          done
+          echo "::error::make-dmg.sh failed three times"
+          exit 1
 
       - name: Publish the release
         if: steps.version.outputs.skip == 'false'
