@@ -86,7 +86,7 @@ jobs:
             git commit -m "build: target ${VORSSAINT_TARGET} for the Intel release of ${TAG}"
           fi
           git tag -f "${TAG}"
-          git push origin "HEAD:refs/heads/intel/${TAG}"
+          git push -f origin "HEAD:refs/heads/intel/${TAG}"
           git push -f origin "refs/tags/${TAG}"
 
       - name: Build
